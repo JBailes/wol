@@ -63,7 +63,7 @@ echo "   .NET SDK $("$DOTNET" --version) at $DOTNET_INSTALL_DIR"
 # -------------------------------------------------------------------------
 echo "==> Checking TLS certificate..."
 
-generate_cert() {
+generate_self_signed() {
   echo "   Generating self-signed TLS certificate (10-year validity)..."
   echo "   (Replace $TLS_CERT / $TLS_KEY with a CA-signed cert for production.)"
   mkdir -p "$TLS_DIR"
@@ -76,23 +76,37 @@ generate_cert() {
     -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
     2>/dev/null
   chmod 600 "$TLS_KEY"
-  echo "   TLS certificate written to $TLS_CERT"
+  echo "   Self-signed certificate written to $TLS_CERT"
 }
 
-if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
-  generate_cert
-elif ! openssl x509 -in "$TLS_CERT" -noout -checkend 2592000 >/dev/null 2>&1; then
-  echo "   Certificate expires within 30 days — regenerating..."
-  generate_cert
-else
+cert_ok() {
+  [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ] || return 1
+  openssl x509 -in "$TLS_CERT" -noout -checkend 2592000 >/dev/null 2>&1 || return 1
   cert_pub="$(openssl x509 -in "$TLS_CERT" -noout -pubkey 2>/dev/null | md5sum)"
   key_pub="$(openssl pkey -in "$TLS_KEY" -pubout 2>/dev/null | md5sum)"
-  if [ "$cert_pub" != "$key_pub" ]; then
-    echo "   Certificate/key mismatch — regenerating..."
-    generate_cert
-  else
-    echo "   TLS certificate OK ($(openssl x509 -in "$TLS_CERT" -noout -enddate 2>/dev/null | cut -d= -f2))"
-  fi
+  [ "$cert_pub" = "$key_pub" ]
+}
+
+# Try to fetch Let's Encrypt cert from the cert server first.
+# Falls back to self-signed if SSH auth isn't set up or the copy fails.
+COPY_SCRIPT="$SCRIPT_DIR/scripts/copy-letsencrypt-certs.sh"
+if [ -x "$COPY_SCRIPT" ] && \
+   ssh -o BatchMode=yes -o ConnectTimeout=5 root@192.168.1.113 true 2>/dev/null; then
+  echo "   Fetching Let's Encrypt certificate from cert server..."
+  "$COPY_SCRIPT" || echo "   WARNING: cert copy failed — will fall back to self-signed."
+fi
+
+if cert_ok; then
+  echo "   TLS certificate OK ($(openssl x509 -in "$TLS_CERT" -noout -enddate 2>/dev/null | cut -d= -f2))"
+else
+  [ -f "$TLS_CERT" ] && echo "   Certificate missing or invalid — regenerating..."
+  generate_self_signed
+fi
+
+# Install weekly cron job to refresh the cert from the cert server.
+RENEWAL_SCRIPT="$SCRIPT_DIR/scripts/install-cert-renewal-cron.sh"
+if [ -x "$RENEWAL_SCRIPT" ]; then
+  "$RENEWAL_SCRIPT"
 fi
 
 # -------------------------------------------------------------------------
