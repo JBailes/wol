@@ -1,6 +1,7 @@
 #!/bin/bash
 # WOL game server setup.
-# Installs all dependencies, generates TLS cert, and builds the server.
+# Installs all dependencies, generates TLS cert, builds the server,
+# and installs/enables a systemd service for boot startup.
 # Idempotent — safe to re-run.
 set -e
 
@@ -11,6 +12,9 @@ DOTNET_CHANNEL="9.0"
 TLS_DIR="$SCRIPT_DIR/data/tls"
 TLS_CERT="$TLS_DIR/server.crt"
 TLS_KEY="$TLS_DIR/server.key"
+SERVICE_NAME="wol"
+SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
+BINARY="$SCRIPT_DIR/Wol.Server/bin/Release/net9.0/Wol.Server.dll"
 
 # -------------------------------------------------------------------------
 # 1. System dependencies
@@ -37,7 +41,6 @@ if [ ! -x "$DOTNET" ]; then
   need_dotnet=true
 else
   installed_ver="$("$DOTNET" --version 2>/dev/null || true)"
-  # Require 9.x
   if [[ "$installed_ver" != 9.* ]]; then
     echo "   Found .NET $installed_ver — need 9.x."
     need_dotnet=true
@@ -82,7 +85,6 @@ elif ! openssl x509 -in "$TLS_CERT" -noout -checkend 2592000 >/dev/null 2>&1; th
   echo "   Certificate expires within 30 days — regenerating..."
   generate_cert
 else
-  # Verify cert and key share the same public key
   cert_pub="$(openssl x509 -in "$TLS_CERT" -noout -pubkey 2>/dev/null | md5sum)"
   key_pub="$(openssl pkey -in "$TLS_KEY" -pubout 2>/dev/null | md5sum)"
   if [ "$cert_pub" != "$key_pub" ]; then
@@ -111,16 +113,74 @@ echo "==> Building Wol.Server (Release)..."
 echo "   Build succeeded."
 
 # -------------------------------------------------------------------------
+# 6. Systemd service
+# -------------------------------------------------------------------------
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "==> Skipping systemd setup (systemctl not found)."
+else
+  echo "==> Installing systemd service..."
+
+  # Determine the user to run the service as.
+  # If run as root, prefer the owner of the repo directory; fall back to root.
+  if [ "$(id -u)" -eq 0 ]; then
+    REPO_OWNER="$(stat -c '%U' "$SCRIPT_DIR")"
+    RUN_AS="${REPO_OWNER:-root}"
+  else
+    RUN_AS="$(id -un)"
+  fi
+
+  cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=WOL MUD Game Server
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=$RUN_AS
+WorkingDirectory=$SCRIPT_DIR
+ExecStart=$DOTNET $BINARY
+Restart=on-failure
+RestartSec=5
+# Make the .NET runtime discoverable without relying on PATH
+Environment=DOTNET_ROOT=$DOTNET_INSTALL_DIR
+Environment=PATH=$DOTNET_INSTALL_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Log to journald; view with: journalctl -u wol -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wol
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable "$SERVICE_NAME"
+
+  if systemctl is-active --quiet "$SERVICE_NAME"; then
+    echo "   Restarting $SERVICE_NAME..."
+    systemctl restart "$SERVICE_NAME"
+  else
+    echo "   Starting $SERVICE_NAME..."
+    systemctl start "$SERVICE_NAME"
+  fi
+
+  systemctl is-active --quiet "$SERVICE_NAME" && \
+    echo "   Service is running." || \
+    echo "   WARNING: service failed to start — check: journalctl -u $SERVICE_NAME -n 50"
+fi
+
+# -------------------------------------------------------------------------
 # Done
 # -------------------------------------------------------------------------
 echo ""
 echo "==> Setup complete."
 echo ""
-echo "   Start the server:"
-echo "     $DOTNET run --project $SCRIPT_DIR/Wol.Server --configuration Release"
-echo ""
-echo "   Or run the built binary directly:"
-echo "     $SCRIPT_DIR/Wol.Server/bin/Release/net9.0/Wol.Server"
+echo "   Service management:"
+echo "     systemctl status $SERVICE_NAME"
+echo "     systemctl restart $SERVICE_NAME"
+echo "     journalctl -u $SERVICE_NAME -f"
 echo ""
 echo "   Listening on port 6969 (plain telnet, TLS telnet, ws://, wss://)."
 echo "   TLS cert: $TLS_CERT"
