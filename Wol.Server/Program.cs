@@ -6,8 +6,10 @@ using Wol.Server.Auth;
 using Wol.Server.Network;
 
 // Build configuration
+// AppContext.BaseDirectory = directory of the compiled binary, regardless of working directory.
+// Cert paths in appsettings.json are resolved relative to working directory (set by the service).
 IConfiguration config = new ConfigurationBuilder()
-    .SetBasePath(Directory.GetCurrentDirectory())
+    .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false)
     .AddEnvironmentVariables()
     .Build();
