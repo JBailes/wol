@@ -65,7 +65,7 @@ Anything else           -> Plain Telnet
 
 ### Detection Timeout
 
-A 2-second timeout is applied during protocol detection. If no data arrives (e.g. port scanner), the connection defaults to plain telnet and sends the greeting. This matches MUD convention where telnet clients may connect silently and wait for the server prompt.
+A 1-second timeout is applied during protocol detection. If no data arrives (e.g. port scanner), the connection defaults to plain telnet and sends the greeting. This matches MUD convention where telnet clients may connect silently and wait for the server prompt.
 
 ## Architecture
 
@@ -235,7 +235,7 @@ public class ProtocolDetector
         int read;
         using var cts = CancellationTokenSource
             .CreateLinkedTokenSource(ct);
-        cts.CancelAfter(_options.DetectionTimeout);  // default 2s
+        cts.CancelAfter(_options.DetectionTimeout);  // default 1s
 
         try
         {
@@ -439,7 +439,7 @@ public class ConnectionManager
     "Port": 6969,
     "TlsCertPath": "/etc/letsencrypt/live/example.com/fullchain.pem",
     "TlsKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem",
-    "DetectionTimeoutMs": 2000,
+    "DetectionTimeoutMs": 1000,
     "LoginTimeoutSeconds": 180,
     "IdleTimeoutSeconds": 3600,
     "MaxConnections": 256,
@@ -454,7 +454,7 @@ public class ServerOptions
     public int Port { get; set; } = 6969;
     public string? TlsCertPath { get; set; }
     public string? TlsKeyPath { get; set; }
-    public TimeSpan DetectionTimeout { get; set; } = TimeSpan.FromSeconds(2);
+    public TimeSpan DetectionTimeout { get; set; } = TimeSpan.FromSeconds(1);
     public TimeSpan LoginTimeout { get; set; } = TimeSpan.FromSeconds(180);
     public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromHours(1);
     public int MaxConnections { get; set; } = 256;
