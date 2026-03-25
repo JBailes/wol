@@ -64,6 +64,14 @@ var listener = new ConnectionListener(
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-logger.LogInformation("WOL server starting. Press Ctrl+C to stop.");
-await listener.RunAsync(cts.Token);
+// Health/metrics server on internal interface (separate from game traffic on :6969)
+var healthBindAddress = config["Health:BindAddress"] ?? "0.0.0.0";
+var healthPort = config.GetValue<int>("Health:Port", 8443);
+var healthTask = Wol.Server.Health.HealthServer.RunAsync(
+    healthBindAddress, healthPort, provider.GetRequiredService<ILoggerFactory>(), cts.Token);
+
+logger.LogInformation("WOL server starting. Health: {Bind}:{Port}. Press Ctrl+C to stop.",
+    healthBindAddress, healthPort);
+await Task.WhenAny(listener.RunAsync(cts.Token), healthTask);
+cts.Cancel();
 logger.LogInformation("WOL server stopped.");
